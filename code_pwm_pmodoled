@@ -1,0 +1,165 @@
+/******************************************************************************
+*
+* Copyright (C) 2009 - 2014 Xilinx, Inc.  All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+* copies of the Software, and to permit persons to whom the Software is
+* furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* Use of the Software is limited solely to applications:
+* (a) running on a Xilinx device, or
+* (b) that interact with a Xilinx device through a bus or interconnect.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+* XILINX  BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+* WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
+* OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+* SOFTWARE.
+*
+* Except as contained in this notice, the name of the Xilinx shall not be used
+* in advertising or otherwise to promote the sale, use or other dealings in
+* this Software without prior written authorization from Xilinx.
+*
+******************************************************************************/
+
+/*
+ * helloworld.c: simple test application
+ *
+ * This application configures UART 16550 to baud rate 9600.
+ * PS7 UART (Zynq) is not initialized by this application, since
+ * bootrom/bsp configures it to baud rate 115200
+ *
+ * ------------------------------------------------
+ * | UART TYPE   BAUD RATE                        |
+ * ------------------------------------------------
+ *   uartns550   9600
+ *   uartlite    Configurable only in HW design
+ *   ps7_uart    115200 (configured by bootrom/bsp)
+ */
+
+#include <stdio.h>
+#include "xil_io.h"
+#include "sleep.h"
+#include "xparameters.h"
+#include "PmodOLED.h"
+#include "xil_cache.h"
+
+/* ================= PWM IP ================= */
+#define PWM_BASE     XPAR_NPWM_0_S00_AXI_BASEADDR
+#define PERIOD1_REG  (PWM_BASE + 0x00)
+#define DUTY1_REG    (PWM_BASE + 0x04)
+#define PERIOD2_REG  (PWM_BASE + 0x08)
+#define DUTY2_REG    (PWM_BASE + 0x0C)
+
+/* ================= BUTTON GPIO ============ */
+#define BTN_BASE     XPAR_AXI_GPIO_0_BASEADDR
+
+/* ================= OLED =================== */
+PmodOLED oled;
+const u8 orientation = 0x0;
+const u8 invert      = 0x0;
+
+int main()
+{
+    u32 period = 100000;      // PWM period
+    u8  duty_percent = 50;   // Duty cho LED2
+    u32 duty_value;
+    u32 btn;
+    char buf[32];
+
+    /* Enable cache */
+    Xil_ICacheEnable();
+    Xil_DCacheEnable();
+
+    /* Init OLED */
+    OLED_Begin(&oled,
+        XPAR_PMODOLED_1_AXI_LITE_GPIO_BASEADDR,
+        XPAR_PMODOLED_1_AXI_LITE_SPI_BASEADDR,
+        orientation, invert);
+
+    /* ================= PWM INIT ================= */
+
+    /* LED1: luôn sáng 100% */
+    Xil_Out32(PERIOD1_REG, period);
+    Xil_Out32(DUTY1_REG, period);
+
+    /* LED2: ban đầu 50% */
+    Xil_Out32(PERIOD2_REG, period);
+    Xil_Out32(DUTY2_REG, (period * duty_percent) / 100);
+
+    /* ================= MAIN LOOP =============== */
+    while (1)
+    {
+        /* Read buttons */
+        btn = Xil_In32(BTN_BASE);
+
+        /* BTN0: tăng duty LED2 */
+        if (btn & 0x01) {
+            if (duty_percent <= 90)
+                duty_percent += 10;
+        }
+
+        /* BTN1: giảm duty LED2 */
+        if (btn & 0x02) {
+            if (duty_percent >= 10)
+                duty_percent -= 10;
+        }
+
+        /* BTN2: tăng period */
+        if (btn & 0x04) {
+            period = period + (period / 10);
+        }
+
+        /* BTN3: giảm period */
+        if (btn & 0x08) {
+            if (period > 20000)
+                period = period - (period / 10);
+        }
+
+        /* Calculate duty value for LED2 */
+        duty_value = (period * duty_percent) / 100;
+
+        /* ========== UPDATE PWM ========== */
+
+        /* LED1 luôn sáng */
+        Xil_Out32(PERIOD1_REG, period);
+        Xil_Out32(DUTY1_REG, period);
+
+        /* LED2 điều chỉnh */
+        Xil_Out32(PERIOD2_REG, period);
+        Xil_Out32(DUTY2_REG, duty_value);
+
+        /* ========== OLED DISPLAY ========== */
+
+        OLED_ClearBuffer(&oled);
+
+        OLED_SetCursor(&oled, 0, 0);
+        OLED_PutString(&oled, "PWM CONTROL");
+
+        OLED_SetCursor(&oled, 0, 1);
+        sprintf(buf, "LED2 Duty: %d%%", duty_percent);
+        OLED_PutString(&oled, buf);
+        OLED_SetCursor(&oled, 0, 2);
+        sprintf(buf, "Period: %lu", period);
+        OLED_PutString(&oled, buf);
+
+        OLED_SetCursor(&oled, 0, 3);
+        sprintf(buf, "DutyVal: %lu", duty_value);
+        OLED_PutString(&oled, buf);
+
+        OLED_Update(&oled);
+
+        /* Debounce */
+        usleep(250000);
+    }
+}
+
+
